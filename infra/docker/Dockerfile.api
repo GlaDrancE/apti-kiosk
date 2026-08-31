@@ -1,0 +1,28 @@
+# Build from the repo root: docker build -f infra/docker/Dockerfile.api .
+FROM node:20-alpine AS base
+RUN corepack enable
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
+COPY apps/api/package.json apps/api/
+COPY packages/db/package.json packages/db/
+COPY packages/shared/package.json packages/shared/
+RUN pnpm install --frozen-lockfile
+
+FROM deps AS build
+COPY . .
+# Prisma client must be generated before the API is bundled.
+RUN pnpm --filter @apti/db generate && pnpm --filter @apti/api build
+
+FROM base AS runner
+ENV NODE_ENV=production
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/packages ./packages
+COPY --from=build /app/apps/api/dist ./apps/api/dist
+COPY --from=build /app/apps/api/node_modules ./apps/api/node_modules
+
+# Never run as root.
+USER node
+EXPOSE 4000
+CMD ["node", "apps/api/dist/server.js"]

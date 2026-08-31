@@ -1,0 +1,245 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Connection URLs live in prisma.config.ts (Prisma 7 moved them out of the schema).
+}
+
+enum Role {
+  STUDENT
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum ExamStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+enum QuestionType {
+  MCQ_SINGLE
+  MCQ_MULTIPLE
+  NUMERIC
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum AssignmentStatus {
+  INVITED
+  STARTED
+  SUBMITTED
+  EXPIRED
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  AUTO_SUBMITTED
+  DISQUALIFIED
+}
+
+model UserProfile {
+  id             String   @id @default(uuid())
+  // Admins sign in through Supabase Auth; this is the join to auth.users.id.
+  supabaseUserId String?  @unique
+  // Students sign in with a roll number + password issued in bulk by an admin.
+  // They never touch Supabase Auth, so both of these are null for admins.
+  loginId        String?  @unique
+  passwordHash   String?
+  // Optional: students are identified by loginId, and many have no college email.
+  email          String?  @unique
+  fullName       String?
+  role           Role     @default(STUDENT)
+  collegeName    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  createdExams      Exam[]             @relation("ExamCreatedBy")
+  assignments       ExamAssignment[]
+  attempts          Attempt[]
+  hackerRankResults HackerRankResult[]
+  auditLogs         AuditLog[]
+
+  @@index([role])
+}
+
+model Exam {
+  id                  String     @id @default(uuid())
+  title               String
+  description         String?
+  durationMinutes     Int
+  startsAt            DateTime
+  endsAt              DateTime
+  status              ExamStatus @default(DRAFT)
+  passingScore        Float      @default(0)
+  hackerRankTestUrl   String?
+  createdById         String
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  createdBy         UserProfile        @relation("ExamCreatedBy", fields: [createdById], references: [id])
+  questions         ExamQuestion[]
+  assignments       ExamAssignment[]
+  attempts          Attempt[]
+  hackerRankResults HackerRankResult[]
+
+  @@index([status, startsAt])
+}
+
+model Question {
+  id            String       @id @default(uuid())
+  type          QuestionType
+  topic         String
+  difficulty    Difficulty   @default(MEDIUM)
+  text          String
+  explanation   String?
+  marks         Float        @default(1)
+  negativeMarks Float        @default(0)
+  // Answer key for NUMERIC questions (MCQs use QuestionOption.isCorrect).
+  numericAnswer Float?
+  isActive      Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  options       QuestionOption[]
+  examQuestions ExamQuestion[]
+  answers       AttemptAnswer[]
+
+  @@index([topic, difficulty, isActive])
+}
+
+model QuestionOption {
+  id         String  @id @default(uuid())
+  questionId String
+  text       String
+  isCorrect  Boolean @default(false)
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+}
+
+model ExamQuestion {
+  id            String @id @default(uuid())
+  examId        String
+  questionId    String
+  order         Int
+  marksOverride Float?
+
+  exam     Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id])
+
+  @@unique([examId, questionId])
+  @@index([examId, order])
+}
+
+model ExamAssignment {
+  id        String           @id @default(uuid())
+  examId    String
+  studentId String
+  status    AssignmentStatus @default(INVITED)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  exam    Exam        @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student UserProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, studentId])
+  @@index([studentId, status])
+}
+
+model Attempt {
+  id              String        @id @default(uuid())
+  examId          String
+  studentId       String
+  startedAt       DateTime      @default(now())
+  submittedAt     DateTime?
+  expiresAt       DateTime
+  status          AttemptStatus @default(IN_PROGRESS)
+  score           Float         @default(0)
+  maxScore        Float         @default(0)
+  // Ranking signal for admin review only — never auto-fails anyone.
+  suspiciousScore Int           @default(0)
+  // Hard violations (left the exam window). MAX_STRIKES ends the attempt.
+  strikes         Int           @default(0)
+  // Used to coalesce the burst of events a single alt-tab produces into one strike.
+  lastStrikeAt    DateTime?
+  // Per-attempt shuffle seed — question and option order is derived from it,
+  // so a reload gives the same order without storing the permutation.
+  shuffleSeed     Int           @default(0)
+
+  exam    Exam            @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student UserProfile     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  answers AttemptAnswer[]
+  events  AttemptEvent[]
+
+  // One attempt per student per exam. Retakes = delete or add an attemptNo.
+  @@unique([examId, studentId])
+  @@index([status, expiresAt])
+}
+
+model AttemptAnswer {
+  id                String   @id @default(uuid())
+  attemptId         String
+  questionId        String
+  selectedOptionIds Json     @default("[]")
+  numericAnswer     Float?
+  isCorrect         Boolean?
+  marksAwarded      Float    @default(0)
+  updatedAt         DateTime @updatedAt
+
+  attempt  Attempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id])
+
+  @@unique([attemptId, questionId])
+}
+
+model AttemptEvent {
+  id        String   @id @default(uuid())
+  attemptId String
+  eventType String
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  attempt Attempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([attemptId, createdAt])
+}
+
+model HackerRankResult {
+  id              String   @id @default(uuid())
+  studentId       String
+  examId          String
+  hackerRankEmail String
+  score           Float
+  maxScore        Float
+  status          String
+  importedAt      DateTime @default(now())
+
+  student UserProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  exam    Exam        @relation(fields: [examId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, studentId])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String
+  action     String
+  targetType String
+  targetId   String?
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  actor UserProfile @relation(fields: [actorId], references: [id])
+
+  @@index([actorId, createdAt])
+}
