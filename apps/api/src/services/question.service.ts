@@ -84,3 +84,30 @@ export async function deleteQuestion(id: string) {
   await getQuestion(id);
   return prisma.question.update({ where: { id }, data: { isActive: false } });
 }
+
+/**
+ * Hard delete. Questions that have been answered, or sit in an exam that has
+ * attempts, are kept for result history and deactivated instead. Others are
+ * removed along with their links to (unattempted) exams.
+ */
+export async function deleteQuestions(ids: string[]) {
+  const locked = await prisma.question.findMany({
+    where: {
+      id: { in: ids },
+      OR: [
+        { answers: { some: {} } },
+        { examQuestions: { some: { exam: { attempts: { some: {} } } } } },
+      ],
+    },
+    select: { id: true },
+  });
+  const lockedIds = locked.map((q) => q.id);
+  const deletable = ids.filter((id) => !lockedIds.includes(id));
+
+  const [, deleted, deactivated] = await prisma.$transaction([
+    prisma.examQuestion.deleteMany({ where: { questionId: { in: deletable } } }),
+    prisma.question.deleteMany({ where: { id: { in: deletable } } }),
+    prisma.question.updateMany({ where: { id: { in: lockedIds } }, data: { isActive: false } }),
+  ]);
+  return { deleted: deleted.count, deactivated: deactivated.count };
+}

@@ -334,6 +334,10 @@ export const importQuestionsCsvSchema = z.object({
   csv: z.string().min(1).max(5_000_000),
 });
 
+export const deleteQuestionsSchema = z.object({
+  ids: z.array(idSchema).min(1).max(1000),
+});
+
 /* ------------------------------------------------------------------ *
  * API response shapes used by the web app
  * ------------------------------------------------------------------ */

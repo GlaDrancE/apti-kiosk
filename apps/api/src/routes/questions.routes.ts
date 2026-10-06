@@ -5,6 +5,7 @@ import {
   updateQuestionSchema,
   listQuestionsQuerySchema,
   importQuestionsCsvSchema,
+  deleteQuestionsSchema,
   idSchema,
 } from '@apti/shared';
 import { requireAdmin, requireAuth } from '../middleware/auth.js';
@@ -43,6 +44,12 @@ questionsRouter.post(
     res.json(report);
   },
 );
+
+questionsRouter.post('/bulk-delete', validate(deleteQuestionsSchema), async (req, res) => {
+  const result = await questionService.deleteQuestions(req.body.ids);
+  audit(req, 'QUESTIONS_DELETED', 'Question', null, { ...result, ids: req.body.ids });
+  res.json(result);
+});
 
 questionsRouter.get('/:id', validate(idParam, 'params'), async (req, res) => {
   res.json(await questionService.getQuestion(param(req, 'id')));

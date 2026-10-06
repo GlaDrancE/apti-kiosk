@@ -44,7 +44,7 @@ const emptyDraft = {
 export function AdminQuestions() {
   const [search, setSearch] = useState('');
   const [topic, setTopic] = useState('');
-  const query = new URLSearchParams({ pageSize: '50' });
+  const query = new URLSearchParams({ pageSize: '100' });
   if (search) query.set('search', search);
   if (topic) query.set('topic', topic);
 
@@ -100,6 +100,39 @@ export function AdminQuestions() {
   async function deactivate(id: string) {
     await api.del(`/questions/${id}`);
     await reload();
+  }
+
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [deleteReport, setDeleteReport] = useState<string | null>(null);
+  const items = data?.items ?? [];
+  const allSelected = items.length > 0 && items.every((q) => selected.has(q.id));
+
+  function toggle(id: string) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelected(next);
+  }
+
+  async function deleteQuestions(ids: string[]) {
+    if (!confirm(`Permanently delete ${ids.length} question(s)? This cannot be undone.`)) return;
+    setDeleteReport(null);
+    try {
+      const r = await api.post<{ deleted: number; deactivated: number }>(
+        '/questions/bulk-delete',
+        { ids },
+      );
+      setDeleteReport(
+        `Deleted ${r.deleted}.` +
+          (r.deactivated
+            ? ` ${r.deactivated} already used in attempts — deactivated instead to keep results.`
+            : ''),
+      );
+      setSelected(new Set());
+      await reload();
+    } catch (err) {
+      setDeleteReport(err instanceof Error ? err.message : 'Delete failed');
+    }
   }
 
   return (
@@ -227,11 +260,35 @@ export function AdminQuestions() {
 
       {loading && <p className="text-slate-500">Loading…</p>}
       {error && <p className="text-red-600">{error}</p>}
+      {deleteReport && <p className="text-sm text-slate-700">{deleteReport}</p>}
+
+      <div className="flex items-center gap-3">
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={() => setSelected(allSelected ? new Set() : new Set(items.map((q) => q.id)))}
+          />
+          Select all ({items.length} shown)
+        </label>
+        {selected.size > 0 && (
+          <button className="btn-secondary text-red-600" onClick={() => void deleteQuestions([...selected])}>
+            Delete selected ({selected.size})
+          </button>
+        )}
+      </div>
 
       <div className="card divide-y divide-slate-100 p-0">
-        {(data?.items ?? []).map((q) => (
+        {items.map((q) => (
           <div key={q.id} className="flex items-start justify-between gap-4 px-5 py-3">
-            <div className="min-w-0">
+            <input
+              type="checkbox"
+              className="mt-1"
+              aria-label="Select question"
+              checked={selected.has(q.id)}
+              onChange={() => toggle(q.id)}
+            />
+            <div className="min-w-0 flex-1">
               <p className="truncate text-sm text-slate-900">{q.text}</p>
               <p className="mt-1 text-xs text-slate-500">
                 {q.type} · {q.topic} · {q.difficulty} · +{q.marks}
@@ -239,14 +296,19 @@ export function AdminQuestions() {
                 {!q.isActive && ' · inactive'}
               </p>
             </div>
-            {q.isActive && (
-              <button className="text-sm text-red-600 hover:underline" onClick={() => void deactivate(q.id)}>
-                Deactivate
+            <div className="flex shrink-0 gap-3">
+              {q.isActive && (
+                <button className="text-sm text-slate-600 hover:underline" onClick={() => void deactivate(q.id)}>
+                  Deactivate
+                </button>
+              )}
+              <button className="text-sm text-red-600 hover:underline" onClick={() => void deleteQuestions([q.id])}>
+                Delete
               </button>
-            )}
+            </div>
           </div>
         ))}
-        {!loading && (data?.items.length ?? 0) === 0 && (
+        {!loading && items.length === 0 && (
           <p className="px-5 py-6 text-slate-500">No questions match.</p>
         )}
       </div>
